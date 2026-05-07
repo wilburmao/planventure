@@ -5,11 +5,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from sqlalchemy import inspect, text
 
 from database import db
 from jwt_utils import create_access_token
 from auth import token_required
 from models import User
+from trips import trip_bp
 
 EMAIL_REGEX = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
@@ -26,10 +28,44 @@ app.config.from_mapping(
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
 )
 
-CORS(app)
+CORS_ORIGINS = os.environ.get(
+    'CORS_ORIGINS',
+    'http://localhost:3000,http://127.0.0.1:3000',
+)
+allowed_origins = [origin.strip() for origin in CORS_ORIGINS.split(',') if origin.strip()]
+
+CORS(
+    app,
+    origins=allowed_origins,
+    supports_credentials=True,
+    allow_headers=['Content-Type', 'Authorization'],
+    methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+)
 db.init_app(app)
+app.register_blueprint(trip_bp)
+
+
+def ensure_trip_columns():
+    inspector = inspect(db.engine)
+    if not inspector.has_table('trips'):
+        return
+
+    existing_columns = {col['name'] for col in inspector.get_columns('trips')}
+    alter_statements = []
+
+    if 'created_at' not in existing_columns:
+        alter_statements.append('ALTER TABLE trips ADD COLUMN created_at DATETIME')
+    if 'updated_at' not in existing_columns:
+        alter_statements.append('ALTER TABLE trips ADD COLUMN updated_at DATETIME')
+
+    if alter_statements:
+        with db.engine.begin() as conn:
+            for stmt in alter_statements:
+                conn.execute(text(stmt))
+
 
 with app.app_context():
+    ensure_trip_columns()
     db.create_all()
 
 @app.route('/')
